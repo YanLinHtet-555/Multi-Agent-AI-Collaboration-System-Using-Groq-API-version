@@ -17,11 +17,11 @@ EXAMPLE_QUERIES = [
 
 
 def check_env() -> bool:
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not os.getenv("GROQ_API_KEY"):
         print(
-            "Error: ANTHROPIC_API_KEY environment variable is not set.\n"
-            "Set it with: export ANTHROPIC_API_KEY=your_key_here\n"
-            "Or create a .env file with: ANTHROPIC_API_KEY=your_key_here"
+            "Error: GROQ_API_KEY environment variable is not set.\n"
+            "Get a free key at: https://console.groq.com/keys\n"
+            "Then add to .env: GROQ_API_KEY=your_key_here"
         )
         return False
     return True
@@ -36,7 +36,7 @@ def run_query(query: str, verbose: bool = True) -> str:
 
 def interactive_mode(verbose: bool) -> None:
     print("=" * 60)
-    print("  Multi-Agent AI Collaboration System")
+    print("  Multi-Agent AI Collaboration System (Groq)")
     print("=" * 60)
     print("Type your query and press Enter. Type 'quit' to exit.")
     print("Type 'examples' to see sample queries.\n")
@@ -73,7 +73,7 @@ def interactive_mode(verbose: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Multi-Agent AI Collaboration System powered by Claude"
+        description="Multi-Agent AI Collaboration System powered by Groq"
     )
     parser.add_argument(
         "--query", "-q",

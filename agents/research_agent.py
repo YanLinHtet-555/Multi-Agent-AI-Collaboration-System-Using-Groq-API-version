@@ -39,20 +39,23 @@ Output format:
 """
 
 SEARCH_TOOL = {
-    "name": "search_web",
-    "description": (
-        "Search the web for current information on a topic. "
-        "Use specific, targeted queries for best results."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The search query string",
-            }
+    "type": "function",
+    "function": {
+        "name": "search_web",
+        "description": (
+            "Search the web for current information on a topic. "
+            "Use specific, targeted queries for best results."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query string",
+                }
+            },
+            "required": ["query"],
         },
-        "required": ["query"],
     },
 }
 

@@ -1,4 +1,7 @@
-import anthropic
+import json
+import re
+import time
+from groq import Groq, BadRequestError, RateLimitError
 
 from core import SharedMemory
 from .planner_agent import PlannerAgent
@@ -43,192 +46,270 @@ accomplish complex user goals.
 
 MANAGER_TOOLS = [
     {
-        "name": "call_planner",
-        "description": (
-            "Ask the Planner agent to decompose a task into a structured execution plan. "
-            "Use this at the start of any complex, multi-step task."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "The task or goal to plan",
+        "type": "function",
+        "function": {
+            "name": "call_planner",
+            "description": (
+                "Ask the Planner agent to decompose a task into a structured execution plan. "
+                "Use this at the start of any complex, multi-step task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The task or goal to plan"},
+                    "context": {"type": "string", "description": "Relevant background context"},
                 },
-                "context": {
-                    "type": "string",
-                    "description": "Relevant background context for the planner",
-                },
+                "required": ["task"],
             },
-            "required": ["task"],
         },
     },
     {
-        "name": "call_researcher",
-        "description": (
-            "Ask the Research agent to gather information on a topic. "
-            "Use this when you need factual information before implementing."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "The research question or topic to investigate",
+        "type": "function",
+        "function": {
+            "name": "call_researcher",
+            "description": (
+                "Ask the Research agent to gather information on a topic. "
+                "Use this when you need factual information before implementing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The research question or topic"},
+                    "context": {"type": "string", "description": "Additional context to guide research"},
                 },
-                "context": {
-                    "type": "string",
-                    "description": "Additional context to guide the research",
-                },
+                "required": ["task"],
             },
-            "required": ["task"],
         },
     },
     {
-        "name": "call_coder",
-        "description": (
-            "Ask the Coder agent to write code or an implementation. "
-            "Provide clear specifications and any relevant context from research or planning."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "What to implement — be specific about language, requirements, and constraints",
+        "type": "function",
+        "function": {
+            "name": "call_coder",
+            "description": (
+                "Ask the Coder agent to write code or an implementation. "
+                "Provide clear specifications and any relevant context from research or planning."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "What to implement — be specific about language and requirements"},
+                    "context": {"type": "string", "description": "Research findings, plan, or other context"},
                 },
-                "context": {
-                    "type": "string",
-                    "description": "Research findings, plan, or other context the Coder needs",
-                },
+                "required": ["task"],
             },
-            "required": ["task"],
         },
     },
     {
-        "name": "call_reviewer",
-        "description": (
-            "Ask the Reviewer agent to review code or a plan for quality and correctness. "
-            "Always call this after the Coder produces code."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "The code or plan to review, plus the original requirements",
+        "type": "function",
+        "function": {
+            "name": "call_reviewer",
+            "description": (
+                "Ask the Reviewer agent to review code or a plan for quality and correctness. "
+                "Always call this after the Coder produces code."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The code or plan to review, plus original requirements"},
+                    "context": {"type": "string", "description": "Original requirements to review against"},
                 },
-                "context": {
-                    "type": "string",
-                    "description": "Original requirements or standards to review against",
-                },
+                "required": ["task"],
             },
-            "required": ["task"],
         },
     },
     {
-        "name": "store_memory",
-        "description": (
-            "Store a key-value pair in shared memory so other agents can access it later. "
-            "Use descriptive keys like 'research_findings', 'execution_plan', 'code_v1'."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "Memory key (use snake_case, descriptive)",
+        "type": "function",
+        "function": {
+            "name": "store_memory",
+            "description": (
+                "Store a key-value pair in shared memory so other agents can access it later. "
+                "Use descriptive keys like 'research_findings', 'execution_plan', 'code_v1'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Memory key (use snake_case, descriptive)"},
+                    "value": {"type": "string", "description": "Content to store"},
                 },
-                "value": {
-                    "type": "string",
-                    "description": "Content to store",
-                },
+                "required": ["key", "value"],
             },
-            "required": ["key", "value"],
         },
     },
     {
-        "name": "read_memory",
-        "description": "Retrieve a previously stored value from shared memory by key.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "The memory key to retrieve",
-                }
+        "type": "function",
+        "function": {
+            "name": "read_memory",
+            "description": "Retrieve a previously stored value from shared memory by key.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "The memory key to retrieve"},
+                },
+                "required": ["key"],
             },
-            "required": ["key"],
         },
     },
 ]
 
 
 class ManagerAgent:
-    MAX_ITERATIONS = 20
+    MAX_ITERATIONS = 10
 
     def __init__(self):
         self.name = "Manager"
-        self.model = "claude-opus-4-7"
-        self.client = anthropic.Anthropic()
+        self.model = "llama-3.3-70b-versatile"
+        self.client = Groq()
         self.shared_memory = SharedMemory()
         self.planner = PlannerAgent()
         self.researcher = ResearchAgent()
         self.coder = CoderAgent()
         self.reviewer = ReviewerAgent()
 
+    @staticmethod
+    def _trim_messages(messages: list, window: int = 12) -> list:
+        """Keep system + first user message, then the last `window` messages."""
+        if len(messages) <= window + 2:
+            return messages
+        return messages[:2] + messages[-window:]
+
+    @staticmethod
+    def _parse_llama_tool_calls(text: str) -> list:
+        """Parse all Llama-style function call variants from text."""
+        calls = []
+        # Try each known format in order of specificity
+        for pattern in [
+            r'<function=(\w+)\((\{.+?\})\)\s*>',        # <function=name(json)>
+            r'<function=(\w+),(\{.+?\})\s*</function>',  # <function=name,json</function>
+            r'<function=(\w+),(\{.+?\})\s*>',            # <function=name,json>
+            r'<function=(\w+),(\{.+?\})',                 # <function=name,json  (no closing)
+        ]:
+            for m in re.finditer(pattern, text, re.DOTALL):
+                try:
+                    calls.append((m.group(1), json.loads(m.group(2))))
+                except json.JSONDecodeError:
+                    pass
+            if calls:
+                break
+        return calls
+
+    def _recover_from_bad_request(self, error: BadRequestError, messages: list, verbose: bool) -> list | None:
+        """If Groq returns tool_use_failed, parse failed_generation and inject results."""
+        body = getattr(error, "body", {}) or {}
+        failed_gen = body.get("error", {}).get("failed_generation", "")
+        if not failed_gen:
+            return None
+
+        calls = self._parse_llama_tool_calls(failed_gen)
+        if not calls:
+            return None
+
+        tool_results = []
+        for name, args in calls:
+            if verbose:
+                print(f"\n[Manager] Recovering malformed tool call: {name}")
+            result = self._execute_tool(name, args, verbose)
+            if len(result) > 1500:
+                result = result[:1500] + "\n\n[...truncated...]"
+            tool_results.append(f"Tool '{name}' result:\n{result}")
+
+        messages.append({
+            "role": "user",
+            "content": (
+                "Tool execution results:\n"
+                + "\n\n".join(tool_results)
+                + "\n\nPlease continue the orchestration based on these results."
+            ),
+        })
+        return messages
+
     def orchestrate(self, user_query: str, verbose: bool = True) -> str:
         if verbose:
             print(f"\n[Manager] Starting orchestration for: {user_query[:80]}...")
 
-        messages = [{"role": "user", "content": user_query}]
+        messages = [
+            {"role": "system", "content": MANAGER_SYSTEM_PROMPT},
+            {"role": "user", "content": user_query},
+        ]
         iteration = 0
+        last_text = ""
 
         while iteration < self.MAX_ITERATIONS:
             iteration += 1
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=8192,
-                thinking={"type": "adaptive"},
-                system=[
+            for attempt in range(3):
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=self._trim_messages(messages),
+                        tools=MANAGER_TOOLS,
+                        tool_choice="auto",
+                    )
+                    break
+                except RateLimitError as e:
+                    wait = 2 ** attempt
+                    if verbose:
+                        print(f"\n[Manager] Rate limited — retrying in {wait}s...")
+                    time.sleep(wait)
+                    if attempt == 2:
+                        return last_text or str(e)
+                except BadRequestError as e:
+                    recovered = self._recover_from_bad_request(e, messages, verbose)
+                    if recovered is not None:
+                        messages = recovered
+                        response = None
+                        break
+                    if verbose:
+                        print(f"\n[Manager] Unrecoverable error: {e}")
+                    return last_text or str(e)
+            else:
+                continue
+
+            if response is None:
+                continue
+
+            choice = response.choices[0]
+            message = choice.message
+
+            if message.content:
+                last_text = message.content
+
+            assistant_msg: dict = {"role": "assistant", "content": message.content}
+            if message.tool_calls:
+                assistant_msg["tool_calls"] = [
                     {
-                        "type": "text",
-                        "text": MANAGER_SYSTEM_PROMPT,
-                        "cache_control": {"type": "ephemeral"},
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
                     }
-                ],
-                messages=messages,
-                tools=MANAGER_TOOLS,
-            )
+                    for tc in message.tool_calls
+                ]
+            messages.append(assistant_msg)
 
-            messages.append({"role": "assistant", "content": response.content})
-
-            if response.stop_reason == "end_turn":
-                final = next(
-                    (b.text for b in response.content if b.type == "text"), ""
-                )
+            if choice.finish_reason == "stop":
                 if verbose:
                     print(f"\n[Manager] Orchestration complete after {iteration} iteration(s).")
-                return final
+                return message.content or last_text
 
-            if response.stop_reason == "tool_use":
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        if verbose:
-                            print(f"\n[Manager] → Calling tool: {block.name}")
-                        result = self._execute_tool(block.name, block.input, verbose)
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        })
-                messages.append({"role": "user", "content": tool_results})
+            if choice.finish_reason == "tool_calls" and message.tool_calls:
+                for tc in message.tool_calls:
+                    if verbose:
+                        print(f"\n[Manager] → Calling tool: {tc.function.name}")
+                    tool_input = json.loads(tc.function.arguments)
+                    result = self._execute_tool(tc.function.name, tool_input, verbose)
+                    if len(result) > 1500:
+                        result = result[:1500] + "\n\n[...truncated...]"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
             else:
                 break
 
-        return "Orchestration reached maximum iterations without completing."
+        return last_text or "Orchestration reached maximum iterations without completing."
 
     def _execute_tool(self, tool_name: str, tool_input: dict, verbose: bool) -> str:
         task = tool_input.get("task", "")
